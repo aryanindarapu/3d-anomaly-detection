@@ -13,6 +13,7 @@ class SharedMLP(nn.Module):
         x = F.leaky_relu(x, 0.2)
         return x
 
+
 class LFABlock(nn.Module):
     def __init__(self, k, d):
         super(LFABlock, self).__init__()
@@ -21,6 +22,17 @@ class LFABlock(nn.Module):
         self.smlp = SharedMLP(4, d)
         
     def forward(self, points, features, knn_indices):
+        """Runs the forward pass of the LFABlock.
+
+        Args:
+            points (torch.tensor): Shape: (B, N, D)
+            features (torch.tensor): Shape: (F_N, F_D) 
+            knn_indices (torch.tensor): Shape: (B, N, k)
+
+        Returns:
+            torch.tensor: Shape: (B, N, 2*F_D)
+        """
+        
         # knn_indices: for each point, the indices of its k=32 nearest neighbors
         # points: (B, N, D)
         B, N, D = points.shape
@@ -48,7 +60,8 @@ class LFABlock(nn.Module):
         average_pooled_features = torch.mean(concatenated_features, dim=2)
         
         return average_pooled_features.squeeze()
-        
+
+
 class ResidualBlock(nn.Module):
     def __init__(self, d=64, k=32):
         super(ResidualBlock, self).__init__()
@@ -65,7 +78,7 @@ class ResidualBlock(nn.Module):
         x = self.final_smlp(x)
         residual = self.res_smlp(features)
         x = x + residual
-        x = F.relu(x)
+        # x = F.relu(x)
         
         return x
     
@@ -86,10 +99,17 @@ class Decoder(nn.Module):
         
         return x.view(-1, 3)
     
+    
 class Model(nn.Module):
-    def __init__(self):
+    def __init__(self, is_student=False):
         super(Model, self).__init__()
         self.residual_blocks = nn.ModuleList([ResidualBlock() for _ in range(4)])
+        
+        if is_student:
+            # initialize with uniformly distributed random weights
+            for block in self.residual_blocks:
+                for param in block.parameters():
+                    nn.init.uniform_(param, -0.1, 0.1) # TODO: is this the correct range?
         
     def forward(self, points, features, knn_indices):
         # run point cloud input through residual blocks
