@@ -3,6 +3,7 @@ from torch import nn
 from sklearn.neighbors import NearestNeighbors
 import os
 import numpy as np
+import open3d as o3d
 
 # https://arxiv.org/pdf/2307.03043#:~:text=For%20any%20two%20point%20sets,the%20Euclidean%20or%20Manhattan%20distance).
 class ChamferDistance(nn.Module):
@@ -10,9 +11,12 @@ class ChamferDistance(nn.Module):
         super(ChamferDistance, self).__init__()
 
     def forward(self, pred, gt):
-        batch_size, num_points, _ = pred.shape
-        expanded_pred = pred.unsqueeze(1).expand(batch_size, num_points, num_points, 3)
-        expanded_gt = gt.unsqueeze(2).expand(batch_size, num_points, num_points, 3)
+        # batch_size, num_points, _ = pred.shape
+        num_points = pred.shape[1]
+        expanded_pred = pred.unsqueeze(1).expand(num_points, num_points, 3)
+        expanded_gt = gt.unsqueeze(2).expand(num_points, num_points, 3)
+        # expanded_pred = pred.unsqueeze(1).expand(batch_size, num_points, num_points, 3)
+        # expanded_gt = gt.unsqueeze(2).expand(batch_size, num_points, num_points, 3)
 
         # this is using L1 norm # TODO: what would happen if I use L2 norm?
         dist = torch.norm(expanded_pred - expanded_gt, dim=3, p=2)
@@ -55,16 +59,20 @@ def compute_receptive_fields(data, p, k, L=4):
 
 
 def chamfer_loss(D_f_p, points, point_indices):
+    # D_f_p: (B, M, 3)
+    # points: (B, N, 3)
+    # point_indices: (16,)
     chamfer_dist = ChamferDistance()
     # Q = points[np.random.choice(points.shape[0], 16, replace=False)]
     total_loss = 0.0
-    for p_idx in point_indices:
-        R_p = compute_receptive_fields(points, points[p_idx], k=32)
-        R_bar_p = R_p - torch.mean(R_p, axis=0)
-        loss = chamfer_dist(D_f_p, R_bar_p)
-        total_loss += loss
+    for i, P in enumerate(points):
+        for p_idx in point_indices:
+            R_p = compute_receptive_fields(P, P[p_idx], k=32)
+            R_bar_p = R_p - torch.mean(R_p, axis=0)
+            loss = chamfer_dist(D_f_p[i], R_bar_p)
+            total_loss += loss
         
-    return total_loss / 16
+    return total_loss / (16 * len(points))
 
 
 def normalized_mse_loss(f_S, f_T):
@@ -87,9 +95,9 @@ def get_anomaly_scores(f_S, f_T):
 
 def get_mvtec_filepaths(split='train'):    
     if split == 'train':
-        subpath_base = os.path.join(path, 'train/good/xyz')
+        subpath_base = 'train/good/xyz'
     elif split == 'val':
-        subpath_base = os.path.join(path, 'validation/good/xyz')
+        subpath_base = 'validation/good/xyz'
     else:
         raise ValueError("Invalid split. Choose 'train' or 'val'.")
                 
@@ -97,8 +105,30 @@ def get_mvtec_filepaths(split='train'):
     for obj in os.listdir('data/mvtec_3d_anomaly_detection'):
         path = os.path.join('data/mvtec_3d_anomaly_detection', obj)
         if os.path.isdir(path):
-            for file in os.listdir(subpath_base):
+            for file in os.listdir(os.path.join(path, subpath_base)):
                 if file.endswith('.tiff'):
-                    f_paths.append(os.path.join(subpath_base, file))
+                    f_paths.append(os.path.join(path, subpath_base, file))
                     
     return f_paths
+
+
+def farthest_point_sampling(point_cloud, num_samples):
+    points = np.asarray(point_cloud.points)
+    num_points = points.shape[0]
+
+    if num_samples >= num_points:
+        return point_cloud
+
+    sampled_indices = [np.random.randint(num_points)]
+    distances = np.linalg.norm(points - points[sampled_indices[0]], axis=1)
+
+    for _ in range(num_samples - 1):
+        next_index = np.argmax(distances)
+        sampled_indices.append(next_index)
+        distances = np.minimum(distances, np.linalg.norm(points - points[next_index], axis=1))
+
+    sampled_points = points[sampled_indices]
+    sampled_point_cloud = o3d.geometry.PointCloud()
+    sampled_point_cloud.points = o3d.utility.Vector3dVector(sampled_points)
+
+    return sampled_point_cloud

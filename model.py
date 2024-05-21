@@ -36,7 +36,7 @@ class LFABlock(nn.Module):
         # knn_indices: for each point, the indices of its k=32 nearest neighbors
         # points: (B, N, D)
         B, N, D = points.shape
-        F_N, F_D = features.shape
+        F_B, F_N, F_D = features.shape
         
         # compute kNN of each point
         # dist_matrix = torch.cdist(points, points)
@@ -92,12 +92,13 @@ class Decoder(nn.Module):
         self.output = nn.Linear(128, m*3)
         
     def forward(self, x):
+        B, _, _ = x.shape
         x = self.input(x)
         x = F.leaky_relu(self.hidden1(x), -0.05)
         x = F.leaky_relu(self.hidden1(x), -0.05)
         x = self.output(x)
         
-        return x.view(-1, 3)
+        return x.view(B, -1, 3)
     
     
 class Model(nn.Module):

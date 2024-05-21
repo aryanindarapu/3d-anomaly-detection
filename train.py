@@ -7,7 +7,7 @@ import numpy as np
 import argparse
 from matplotlib import pyplot as plt
 from utils import chamfer_loss, normalized_mse_loss
-import tqdm
+from tqdm import tqdm
 
 if __name__ == "__main__":
     # train_data, val_data = generate_data(n_points=64000, n_train=500, n_val=25, save=True)
@@ -27,10 +27,10 @@ if __name__ == "__main__":
                 
         mvtec_train_data = np.load(args.data + '/mvtec_train_point_clouds.npy')
     else:
-        mn10_train_data, mn10_val_data = get_mn10_data(n_points=64000, n_train=500, n_val=25, save=True)
+        mn10_train_data, mn10_val_data = get_mn10_data(n_points=64000, n_train=5, n_val=5, save=True)
         mvtec_train_data = get_mvtec_data(n_points=64000, save=True)
     
-    exit()
+    # exit()
     # Initialize ModelNet10 dataset with normalized point clouds
     mn10_train_dataset = ADDataset(mn10_train_data, k=32, normalize=True)
     mn10_val_dataset = ADDataset(mn10_val_data, k=32, normalize=True)
@@ -57,10 +57,10 @@ if __name__ == "__main__":
         for i, (points, nearest_neighbors) in enumerate(mn10_train_loader):
             # features = torch.zeros(64000, 64) # n points, dimension 64; TODO: should I reinitialize for every point cloud?
             teacher_optimizer.zero_grad()
-            features = teacher(points, torch.zeros(64000, 64), nearest_neighbors)
+            features = teacher(points, torch.zeros(points.shape[0], 64000, 64), nearest_neighbors)
             
             indices = np.random.choice(features.shape[0], 16)
-            output = decoder(features[indices, :])
+            output = decoder(features[:, indices, :])
             
             loss = chamfer_loss(output, points, indices)
             loss.backward()
