@@ -124,8 +124,6 @@ def get_mvtec_data(n_points=64000, save=True, split='train'):
 
 
 def get_mvtec_test_data(n_samples=10):
-    gt_f_paths, f_paths = get_mvtec_test_filepaths(n_samples)
-    print(gt_f_paths, f_paths)
     gt_data, pcds = [], []
     
     anomaly_labels = ['combined', 'contamination', 'crack', 'cut', 'hole']
