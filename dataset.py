@@ -7,12 +7,126 @@ from tqdm import tqdm
 from sklearn.neighbors import NearestNeighbors
 from tifffile import tifffile
 import os
+import trimesh
 import open3d as o3d
 from utils import get_mvtec_filepaths
 import time
 
 # return 500 training and 25 validation point clouds, choose n=64000 input points from each scene
 def get_mn10_data(n_points=64000, n_train=500, n_val=25, save=True):
+    df = pd.read_csv('data/metadata_modelnet10.csv')
+    # print(df['split'].unique())
+    # train, test = df[df['split'] == 'train'], df[df['split'] == 'test']
+    data = df[df['split'] == 'train']
+    path_prefix = 'data/ModelNet10/'
+
+    train_point_clouds = []
+    val_point_clouds = []
+    # for i in tqdm(range(n_train + n_val)):
+    i = 0
+    print(f"Generating {n_train} training and {n_val} validation point clouds.")
+    
+    num_continues = 0
+    big_loop_time = time.perf_counter()
+    while i < n_train + n_val:
+        time_start = time.perf_counter()
+        
+        if i == n_train:
+            data = df[df['split'] == 'test']
+        
+        random_train = data.sample(n=10)
+        # print(random_train.head())
+        
+        # TODO: do i generate a new scene each time?
+        o3d_meshes = []
+        # combined_train_pcd = o3d.geometry.PointCloud()
+        for file in random_train['object_path']:           
+            mesh = o3d.io.read_triangle_mesh(path_prefix + file) # NOTE: did you sample points from the mesh or use the file's vertices?
+            # pcd = o3d.io.read_point_cloud(path_prefix + file)
+            # if not mesh.has_vertex_normals():
+            #     mesh.compute_vertex_normals()
+
+            # visualize the meshes
+            # o3d.visualization.draw_geometries([mesh])
+            
+            # mesh = trimesh.load(path_prefix + file, file_type='off')
+            # vertices = mesh.vertices
+                
+            mesh.scale(1.0 / np.max(mesh.get_max_bound() - mesh.get_min_bound()), center=mesh.get_center())
+
+            # Apply a random rotation
+            rotation = o3d.geometry.get_rotation_matrix_from_axis_angle(np.random.rand(3) * 2 * np.pi)
+            mesh.rotate(rotation, center=mesh.get_center())
+            
+            translation_vector = np.random.uniform(-3, 3, size=3)
+            mesh.translate(translation_vector, relative=False)
+
+            # Convert to point cloud
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(mesh.vertices)
+            pcd.points = mesh.vertices
+            # o3d.visualization.draw_geometries([pcd])
+            # pcd = mesh.sample_points_uniformly(number_of_points=1000)
+            # o3d.visualization.draw_geometries([pcd])
+            
+            o3d_meshes.append(pcd)
+            # combined_train_pcd += pcd
+            # combined_train_pcd += mesh.vertices
+            
+        # axis_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1.0)
+        # bounding_box = o3d.geometry.AxisAlignedBoundingBox(min_bound=(-3, -3, -3), max_bound=(3, 3, 3))
+        # bounding_box.color = (1, 0, 0)  
+        # o3d.visualization.draw_geometries([*o3d_meshes, axis_frame, bounding_box])
+
+        # visualize the meshes
+        combined_train_pcd = o3d.geometry.PointCloud()
+        for pcd in o3d_meshes:
+            combined_train_pcd += pcd
+            
+        combined_train_pcd.remove_duplicated_points()
+            
+        # if num points < 64000, retry with a new scene
+        if len(combined_train_pcd.points) < n_points:
+            continue
+        
+        # https://medium.com/@sim30217/farthest-point-sampling-43ddedc25628
+        combined_train_pcd = combined_train_pcd.farthest_point_down_sample(n_points)
+        # farthest_points = farthest_point_sampling(np.asarray(combined_train_pcd.points), n_points)
+        
+        # axis_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1.0)
+        # bounding_box = o3d.geometry.AxisAlignedBoundingBox(min_bound=(-3, -3, -3), max_bound=(3, 3, 3))
+        # bounding_box.color = (1, 0, 0)  
+        # o3d.visualization.draw_geometries([combined_train_pcd, axis_frame, bounding_box])
+        
+        # o3d.visualization.draw_geometries([combined_train_pcd, axis_frame, bounding_box])
+        farthest_points = np.asarray(combined_train_pcd.points)
+        
+        if i < n_train:
+            train_point_clouds.append(farthest_points)
+        else:
+            val_point_clouds.append(farthest_points)
+        
+        i += 1
+        
+        if i % 10 == 0:
+            print(f"Generated {i} point clouds.")
+            print(f"Time taken for the last point clouds: {time.perf_counter() - time_start:.2f} seconds.")
+            print(f"Total time taken: {time.perf_counter() - big_loop_time:.2f} seconds.")
+            print()
+            
+
+    train_point_clouds = np.array(train_point_clouds)
+    val_point_clouds = np.array(val_point_clouds)
+    print(train_point_clouds.shape, val_point_clouds.shape)
+
+    if save:
+        np.save('data/train_point_clouds.npy', train_point_clouds)
+        np.save('data/val_point_clouds.npy', val_point_clouds)
+    
+    return train_point_clouds, val_point_clouds
+
+# return 500 training and 25 validation point clouds, choose n=64000 input points from each scene
+def get_mn10_data_new(n_points=64000, n_train=500, n_val=25, save=True):
     df = pd.read_csv('data/metadata_modelnet10.csv')
     # print(df['split'].unique())
     # train, test = df[df['split'] == 'train'], df[df['split'] == 'test']
@@ -62,6 +176,11 @@ def get_mn10_data(n_points=64000, n_train=500, n_val=25, save=True):
             # combined_train_pcd += pcd
             # combined_train_pcd += mesh.vertices
 
+        # axis_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1.0)
+        # bounding_box = o3d.geometry.AxisAlignedBoundingBox(min_bound=(-3, -3, -3), max_bound=(3, 3, 3))
+        # bounding_box.color = (1, 0, 0)  
+        # o3d.visualization.draw_geometries([*o3d_meshes, axis_frame, bounding_box])
+        
         # visualize the meshes
         combined_train_pcd = o3d.geometry.PointCloud()
         for pcd in o3d_meshes:
@@ -108,6 +227,7 @@ def get_mn10_data(n_points=64000, n_train=500, n_val=25, save=True):
         np.save('data/val_point_clouds.npy', val_point_clouds)
     
     return train_point_clouds, val_point_clouds
+
 
 
 def get_mvtec_data(n_points=64000, save=True, split='train'):
@@ -218,7 +338,7 @@ class ADDataset(Dataset):
                 knn_indices = self.nearest_neighbors[P_idx]
                 knn_points = P[knn_indices]
                 
-                # Compute distances in a vectorized manner
+                # Compute distances between each point and its k nearest neighbors
                 distances = torch.norm(P[:, None, :] - knn_points, dim=-1)
                 all_distances.append(distances)
                 N += P.shape[0]
@@ -236,10 +356,11 @@ class ADDataset(Dataset):
                 
             
             print(f"Normalization factor: {s}")
-            # visualize the normalized point cloud
-            # pc = o3d.geometry.PointCloud()
-            # pc.points = o3d.utility.Vector3dVector(self.data[0].numpy())
-            # o3d.visualization.draw_geometries([pc])
+            # for i in range(5):
+            #     # visualize the normalized point cloud
+            #     pc = o3d.geometry.PointCloud()
+            #     pc.points = o3d.utility.Vector3dVector(self.data[i].numpy())
+            #     o3d.visualization.draw_geometries([pc])
             
                 
         
@@ -261,3 +382,6 @@ class ADDataset(Dataset):
     
     def __getitem__(self, idx):
         return self.data[idx], self.nearest_neighbors[idx], self.nnbrs_obj_list[idx]
+    
+    def get_nnbrs(self):
+        return self.nearest_neighbors

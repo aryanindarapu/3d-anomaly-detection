@@ -9,22 +9,7 @@ import open3d as o3d
 class ChamferDistance(nn.Module):
     def __init__(self):
         super(ChamferDistance, self).__init__()
-
-    # def forward(self, pred, gt):
-    #     # batch_size, num_points, _ = pred.shape
-    #     num_points = pred.shape[1]
-    #     expanded_pred = pred.unsqueeze(1).expand(num_points, num_points, 3)
-    #     expanded_gt = gt.unsqueeze(2).expand(num_points, num_points, 3)
-    #     # expanded_pred = pred.unsqueeze(1).expand(batch_size, num_points, num_points, 3)
-    #     # expanded_gt = gt.unsqueeze(2).expand(batch_size, num_points, num_points, 3)
-
-    #     # this is using L1 norm # TODO: what would happen if I use L2 norm?
-    #     dist = torch.norm(expanded_pred - expanded_gt, dim=3, p=2)
-    #     dist1, _ = torch.min(dist, dim=2)
-    #     dist2, _ = torch.min(dist, dim=1)
-
-    #     chamfer_loss = (dist1.mean(dim=1) + dist2.mean(dim=1)).mean()
-    #     return chamfer_loss
+        
     def forward(self, x, y):
         x = x.unsqueeze(1)  # (B, 1, M, 3)
         y = y.unsqueeze(2)  # (B, N, 1, 3)
@@ -40,20 +25,6 @@ class ChamferDistance(nn.Module):
         loss = torch.mean(dist_y_to_x) + torch.mean(dist_x_to_y)
         
         return loss
-
-# def compute_receptive_fields(data, p, k):
-#     # TODO: current taking 2 hops. Should I take 2 * 4 = 8 hops (equal to num executed LFA blocks)?
-#     nbrs = NearestNeighbors(n_neighbors=k+1, algorithm='auto').fit(data)
-#     distances, indices = nbrs.kneighbors([p])
-#     N1 = indices.flatten()
-#     N2 = set()
-#     for idx in N1:
-#         _, hop_indices = nbrs.kneighbors([data[idx]])
-#         N2.update(hop_indices.flatten())
-    
-#     all_points = set(N1).union(N2)
-    
-#     return data[list(all_points)]
 
 def compute_receptive_fields(data, p, nnbrs, L=4):
     hops = 4 * L
@@ -72,8 +43,48 @@ def compute_receptive_fields(data, p, nnbrs, L=4):
     
     return data[list(current_points)]
 
+def compute_receptive_fields(data, p, nnbrs, L=4):
+    hops = 4 * L
+    # nbrs = NearestNeighbors(n_neighbors=k+1, algorithm='auto').fit(data)
+    
+    # distances, indices = nnbrs.kneighbors([p])
+    # knn_l = set(indices.flatten()) # knn_1
+    # knn_i = set([p]) # knn_1
+    # knn_l = set([p]) # union of all knn_i
+    
+    # for _ in range(hops):
+    #     next_points = set()
+    #     for idx in knn_i:
+    #         _, hop_indices = nnbrs.kneighbors([data[idx]])
+    #         next_points.update(hop_indices.flatten())
+        
+    #     knn_i = next_points
+    #     knn_l.update(next_points)
+    
+    # return data[list(knn_l)]
+    
+    # knn_l = set(indices.flatten()) # knn_1
+    # knn_i = set([p]) # knn_1
+    # knn_l = set([p]) # union of all knn_i
+    
+    knn_i = set([p.cpu().numpy().tolist()])
+    # knn_i = torch.tensor([p])
+    knn_l = set(knn_i) # union of all knn_i
+    for _ in range(hops):
+        # next_points = set()
+        # hop_indices = nnbrs[list(knn_i)].flatten()
+        hop_indices = nnbrs[list(knn_i)].flatten().cpu().numpy()
+        # for idx in knn_i:
+        #     _, hop_indices = nnbrs.kneighbors([data[idx]])
+        #     next_points.update(hop_indices.flatten())
+        
+        knn_l.update(hop_indices)
+        knn_i = np.unique(hop_indices)
+    
+    return data[list(knn_l)]
 
-def chamfer_loss(D_f_p, points, point_indices, k, nnbrs, device):
+
+def chamfer_loss(D_f_p, points, point_indices, nnbrs, device):
     # D_f_p: (B, M, 3)
     # points: (B, N, 3)
     # point_indices: (16,)
@@ -81,13 +92,46 @@ def chamfer_loss(D_f_p, points, point_indices, k, nnbrs, device):
     # Q = points[np.random.choice(points.shape[0], 16, replace=False)]
     total_loss = 0.0
     for i, P in enumerate(points):
+        # for p_idx in point_indices:
+        #     # R_p = compute_receptive_fields(P, P[p_idx], nnbrs[i])
+        #     R_p = compute_receptive_fields(P, p_idx, nnbrs[i])
+        #     R_bar_p = R_p - torch.mean(R_p, axis=0)
+        #     loss = chamfer_dist(D_f_p[i].unsqueeze(0).to(device), R_bar_p.unsqueeze(0).to(device))
+        #     total_loss += loss
+        
+        receptive_fields_list = []
         for p_idx in point_indices:
-            R_p = compute_receptive_fields(P, P[p_idx], nnbrs[i])
+            R_p = compute_receptive_fields(P, p_idx, nnbrs[i])
+            receptive_fields_list.append(R_p)
+
+        # Compute the Chamfer distance for each receptive field
+        for R_p in receptive_fields_list:
             R_bar_p = R_p - torch.mean(R_p, axis=0)
+            print(D_f_p[i].unsqueeze(0).shape, R_bar_p.unsqueeze(0).shape)
             loss = chamfer_dist(D_f_p[i].unsqueeze(0).to(device), R_bar_p.unsqueeze(0).to(device))
             total_loss += loss
         
     return total_loss / (16 * len(points))
+    
+    # batch_size = len(points)
+    # num_indices = len(point_indices)
+    
+    # for i, P in enumerate(points):
+    #     receptive_fields = []
+    #     for p_idx in point_indices:
+    #         R_p = compute_receptive_fields(P, P[p_idx], nnbrs[i])
+    #         receptive_fields.append(R_p)
+        
+    #     receptive_fields = torch.stack(receptive_fields)  # (16, N, 3)
+    #     R_bar_p = receptive_fields - torch.mean(receptive_fields, axis=1, keepdim=True)  # (16, N, 3)
+
+    #     D_f_p_expanded = D_f_p[i].unsqueeze(0).expand(num_indices, -1, -1).to(device)  # (16, M, 3)
+    #     R_bar_p = R_bar_p.to(device)  # (16, N, 3)
+
+    #     loss = chamfer_dist(D_f_p_expanded, R_bar_p)
+    #     total_loss += loss
+        
+    # return total_loss / (num_indices * batch_size)
 
 # def chamfer_loss(D_f_p, points, point_indices, k=32):
 #     # D_f_p: (B, M, 3)
@@ -119,11 +163,21 @@ def chamfer_loss(D_f_p, points, point_indices, k, nnbrs, device):
     
 #     return loss / (16 * len(points))
 
+def get_teacher_features_distr(teacher, points, nearest_neighbors):
+    teacher.eval()
+    with torch.no_grad():
+        features = teacher(points, torch.zeros(points.shape[0], 16000, 64), nearest_neighbors) # (B, N, 64)
+        
+    mean = torch.mean(features, dim=(0, 1))
+    std = torch.std(features, dim=(0, 1))
+    
+    return mean.cpu(), std.cpu()
 
-def normalized_mse_loss(f_S, f_T):
+
+def normalized_mse_loss(f_S, f_T, mean, std):
     # transform f_T to be centered around 0 with unit variance
-    f_T = f_T - torch.mean(f_T, axis=0)
-    f_T = f_T / torch.std(f_T, axis=0)
+    f_T = f_T - mean
+    f_T = f_T / std
     score = nn.functional.mse_loss(f_S, f_T)
     
     return score

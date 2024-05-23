@@ -6,13 +6,14 @@ from model import Model, Decoder
 import numpy as np
 import argparse
 from matplotlib import pyplot as plt
-from utils import chamfer_loss, normalized_mse_loss
+from utils import chamfer_loss, normalized_mse_loss, get_teacher_features_distr
 from tqdm import tqdm
 
 if __name__ == "__main__":
     # train_data, val_data = generate_data(n_points=64000, n_train=500, n_val=25, save=True)
     parser = argparse.ArgumentParser()
     parser.add_argument("-d", "--data", type=str, default=None, help="Path to data files")
+    parser.add_argument("-m", "--model", type=str, default=None, help="Path to models")
     args = parser.parse_args()
     
     n_points = 16000
@@ -46,71 +47,77 @@ if __name__ == "__main__":
     
     # Initialize the teacher and decoder models
     teacher = Model(k=k).to(device)
-    decoder = Decoder().to(device)
-    teacher_optimizer = torch.optim.Adam(teacher.parameters(), lr=1e-3, weight_decay=1e-6)
     
-    n_teacher_epochs = 10 # 250
-    
-    # Teacher-decoder loss function - minimize Chamfer distance to train D
-    # Q = 16 randomly sampled points from input point cloud
-    # Chamfer(D(f_p), Rbar(p)) for each p in Q
-    
-    teacher.train()
-    print("Training teacher model")
-    teacher_train_losses = []
-    teacher_val_losses = []
-    for epoch in tqdm(range(n_teacher_epochs)):
-        total_loss = 0.0
-        for i, (points, nearest_neighbors, nnbrs) in enumerate(mn10_train_loader):
-            # features = torch.zeros(64000, 64) # n points, dimension 64; TODO: should I reinitialize for every point cloud?
-            teacher_optimizer.zero_grad()
-            features = teacher(points.to(device), torch.zeros(points.shape[0], n_points, 64).to(device), nearest_neighbors.to(device))
-            
-            # indices = np.random.choice(features.shape[1], 16)
-            indices = torch.randint(0, features.shape[1], (16,))
-            output = decoder(features[:, indices, :])
-            
-            loss = chamfer_loss(output, points.to(device), indices, k, nnbrs, device)
-            loss.backward()
-            total_loss += loss.item()
-            teacher_optimizer.step()            
+    if args.model:
+        teacher.load_state_dict(torch.load(args.model + '/teacher.pth', map_location=device))
+    else:
+        decoder = Decoder().to(device)
+        teacher_optimizer = torch.optim.Adam(teacher.parameters(), lr=1e-3, weight_decay=1e-6)
         
-        if i % 10 == 0:
-            print(f"Epoch {epoch}, Iteration {i}, Loss: {loss.item()}")
-        teacher_train_losses.append(loss.item())
+        n_teacher_epochs = 10 # 250
         
-        # Validation
-        with torch.no_grad():
-            val_loss = 0.0
-            for points, nearest_neighbors, nnbrs in mn10_val_loader:
+        # Teacher-decoder loss function - minimize Chamfer distance to train D
+        # Q = 16 randomly sampled points from input point cloud
+        # Chamfer(D(f_p), Rbar(p)) for each p in Q
+        
+        teacher.train()
+        print("Training teacher model")
+        teacher_train_losses = []
+        teacher_val_losses = []
+        for epoch in tqdm(range(n_teacher_epochs)):
+            total_loss = 0.0
+            for i, (points, nearest_neighbors, nnbrs) in enumerate(mn10_train_loader):
+                # features = torch.zeros(64000, 64) # n points, dimension 64; TODO: should I reinitialize for every point cloud?
+                teacher_optimizer.zero_grad()
                 features = teacher(points.to(device), torch.zeros(points.shape[0], n_points, 64).to(device), nearest_neighbors.to(device))
+                
+                # indices = np.random.choice(features.shape[1], 16)
                 indices = torch.randint(0, features.shape[1], (16,))
                 output = decoder(features[:, indices, :])
-                loss = chamfer_loss(output, points.to(device), indices, k, nnbrs, device)
-                val_loss += loss.item()
                 
-            teacher_val_losses.append(val_loss)
-            
-            
-    # plot loss curve
-    plt.plot(teacher_train_losses)
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss")
-    plt.title("Teacher Model Loss")
-    plt.show()
-    
-    plt.plot(teacher_val_losses)
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss")
-    plt.title("Teacher Model Validation Loss")
-    plt.show()
+                # loss = chamfer_loss(output, points.to(device), indices, nnbrs, device)
+                loss = chamfer_loss(output, points.to(device), indices, nearest_neighbors, device)
+                loss.backward()
+                total_loss += loss.item()
+                teacher_optimizer.step()
+                if i % 50 == 0:
+                    print(f"Epoch {epoch}, Iteration {i}, Loss: {loss.item()}")
                 
-    torch.save(teacher.state_dict(), 'models/teacher.pth')
-    torch.save(decoder.state_dict(), 'models/decoder.pth')
+            # print(f"Epoch {epoch} time: {time.perf_counter() - batch_loop}. Loss: {total_loss}")
+            teacher_train_losses.append(loss.item())
+            
+            # Validation
+            with torch.no_grad():
+                val_loss = 0.0
+                for points, nearest_neighbors, nnbrs in mn10_val_loader:
+                    features = teacher(points.to(device), torch.zeros(points.shape[0], n_points, 64).to(device), nearest_neighbors.to(device))
+                    indices = torch.randint(0, features.shape[1], (16,))
+                    output = decoder(features[:, indices, :])
+                    loss = chamfer_loss(output, points.to(device), indices, nnbrs, device)
+                    val_loss += loss.item()
+                    
+                teacher_val_losses.append(val_loss)
+                
+                
+        # plot loss curve
+        plt.plot(teacher_train_losses)
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.title("Teacher Model Loss")
+        plt.show()
+        
+        plt.plot(teacher_val_losses)
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.title("Teacher Model Validation Loss")
+        plt.show()
+                    
+        torch.save(teacher.state_dict(), 'models/teacher.pth')
+        torch.save(decoder.state_dict(), 'models/decoder.pth')
     
-    mvtec_train_dataset = ADDataset(mvtec_train_data, k=k)
+    mvtec_train_dataset = ADDataset(mvtec_train_data[:100], k=k)
     
-    mvtec_train_loader = DataLoader(mvtec_train_dataset, batch_size=1, shuffle=True)
+    mvtec_train_loader = DataLoader(mvtec_train_dataset, batch_size=1, shuffle=True, collate_fn=custom_collate_fn)
     
     # Initialize student model with random weights    
     student = Model(k=k, is_student=True).to(device)
@@ -120,14 +127,18 @@ if __name__ == "__main__":
     teacher.eval()
     for param in teacher.parameters():
         param.requires_grad = False
+    
+    mvtec_train_tmp = DataLoader(mvtec_train_dataset, batch_size=len(mvtec_train_dataset), shuffle=True, collate_fn=custom_collate_fn)
+    for i, (points, nearest_neighbors, nnbrs) in enumerate(mvtec_train_tmp):
+        mean, std = get_teacher_features_distr(teacher, points.to(device), nearest_neighbors.to(device))
         
     # criterion = nn.MSELoss()
     student.train()
     print("Training student model")
     student_losses = []
     for epoch in tqdm(range(n_student_epochs)):
-        loss = 0.0
-        for i, (points, nearest_neighbors) in enumerate(mvtec_train_loader):
+        total_loss = 0.0
+        for i, (points, nearest_neighbors, nnbrs) in enumerate(mvtec_train_loader):
             # f_S = torch.zeros(64000, 64) # TODO: reinit the student model?
             student_optimizer.zero_grad()
             with torch.no_grad():
@@ -135,14 +146,15 @@ if __name__ == "__main__":
             
             f_S = student(points.to(device), torch.zeros(points.shape[0], n_points, 64).to(device), nearest_neighbors.to(device))
             
-            loss += normalized_mse_loss(f_S, f_T)
+            loss = normalized_mse_loss(f_S, f_T, mean.to(device), std.to(device))
             # loss = criterion(f_S, f_T)
-            loss.backward()            
+            loss.backward()
+            total_loss += loss.item()
             student_optimizer.step()
             
+            if i % 50 == 0:
+                print(f"Epoch {epoch}, Iteration {i}, Loss: {loss.item()}")
         student_losses.append(loss.item())
-        if i % 10 == 0:
-            print(f"Epoch {epoch}, Iteration {i}, Loss: {loss.item()}")
             
             
     # plot loss curve
