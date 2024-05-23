@@ -59,7 +59,7 @@ class LFABlock(nn.Module):
         
         average_pooled_features = torch.mean(concatenated_features, dim=2)
         
-        return average_pooled_features.squeeze()
+        return average_pooled_features
 
 
 class ResidualBlock(nn.Module):
@@ -102,9 +102,9 @@ class Decoder(nn.Module):
     
     
 class Model(nn.Module):
-    def __init__(self, is_student=False):
+    def __init__(self, k, is_student=False):
         super(Model, self).__init__()
-        self.residual_blocks = nn.ModuleList([ResidualBlock() for _ in range(4)])
+        self.residual_blocks = nn.ModuleList([ResidualBlock(k=k) for _ in range(4)])
         
         if is_student:
             # initialize with uniformly distributed random weights

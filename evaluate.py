@@ -19,9 +19,12 @@ if __name__ == "__main__":
         mvtec_gt_test_data = np.load(args.data + '/mvtec_gt_test.npy')
     else:
         mvtec_gt_test_vals, mvtec_anomaly_test_data = get_mvtec_test_data(n_samples=5)
+        
+    n_points = 16000
+    k = 8
     
-    teacher = Model()
-    student = Model()
+    teacher = Model(k=k)
+    student = Model(k=k)
     teacher.load_state_dict(torch.load('models/teacher.pth'))
     student.load_state_dict(torch.load('models/student.pth'))
     
@@ -33,8 +36,8 @@ if __name__ == "__main__":
 
     with torch.no_grad():
         for i, (points, nearest_neighbors) in enumerate(test_loader):
-            f_S = student(points, torch.zeros(64000, 64), nearest_neighbors)
-            f_T = teacher(points, torch.zeros(64000, 64), nearest_neighbors)
+            f_S = student(points, torch.zeros(n_points, 64), nearest_neighbors)
+            f_T = teacher(points, torch.zeros(n_points, 64), nearest_neighbors)
             scores = get_anomaly_scores(f_S, f_T)
             
             ### draw model output geometries (i.e. model detected anomalies) ###

@@ -112,7 +112,7 @@ def get_mn10_data(n_points=64000, n_train=500, n_val=25, save=True):
 
 def get_mvtec_data(n_points=64000, save=True, split='train'):
     pc_list = []
-    c = 0
+    # c = 0
     for file in tqdm(get_mvtec_filepaths(split)):
         img = tifffile.imread(file).reshape(-1, 3)
         pcd = o3d.geometry.PointCloud()
@@ -123,10 +123,10 @@ def get_mvtec_data(n_points=64000, save=True, split='train'):
         # o3d.visualization.draw_geometries([new_pcd])
         farthest_points = np.asarray(new_pcd.points)
         pc_list.append(farthest_points)
-        if c == 5:
-            break
+        # if c == 5:
+        #     break
         
-        c += 1
+        # c += 1
     
     pc_list = np.array(pc_list)
     print(f"{split} Dataset Shape:", pc_list.shape)

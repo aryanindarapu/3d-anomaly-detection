@@ -10,21 +10,36 @@ class ChamferDistance(nn.Module):
     def __init__(self):
         super(ChamferDistance, self).__init__()
 
-    def forward(self, pred, gt):
-        # batch_size, num_points, _ = pred.shape
-        num_points = pred.shape[1]
-        expanded_pred = pred.unsqueeze(1).expand(num_points, num_points, 3)
-        expanded_gt = gt.unsqueeze(2).expand(num_points, num_points, 3)
-        # expanded_pred = pred.unsqueeze(1).expand(batch_size, num_points, num_points, 3)
-        # expanded_gt = gt.unsqueeze(2).expand(batch_size, num_points, num_points, 3)
+    # def forward(self, pred, gt):
+    #     # batch_size, num_points, _ = pred.shape
+    #     num_points = pred.shape[1]
+    #     expanded_pred = pred.unsqueeze(1).expand(num_points, num_points, 3)
+    #     expanded_gt = gt.unsqueeze(2).expand(num_points, num_points, 3)
+    #     # expanded_pred = pred.unsqueeze(1).expand(batch_size, num_points, num_points, 3)
+    #     # expanded_gt = gt.unsqueeze(2).expand(batch_size, num_points, num_points, 3)
 
-        # this is using L1 norm # TODO: what would happen if I use L2 norm?
-        dist = torch.norm(expanded_pred - expanded_gt, dim=3, p=2)
-        dist1, _ = torch.min(dist, dim=2)
-        dist2, _ = torch.min(dist, dim=1)
+    #     # this is using L1 norm # TODO: what would happen if I use L2 norm?
+    #     dist = torch.norm(expanded_pred - expanded_gt, dim=3, p=2)
+    #     dist1, _ = torch.min(dist, dim=2)
+    #     dist2, _ = torch.min(dist, dim=1)
 
-        chamfer_loss = (dist1.mean(dim=1) + dist2.mean(dim=1)).mean()
-        return chamfer_loss
+    #     chamfer_loss = (dist1.mean(dim=1) + dist2.mean(dim=1)).mean()
+    #     return chamfer_loss
+    def forward(self, x, y):
+        x = x.unsqueeze(1)  # (B, 1, M, 3)
+        y = y.unsqueeze(2)  # (B, N, 1, 3)
+        
+        # Calculate pairwise distances
+        dist = torch.sum((x - y) ** 2, -1)  # (B, N, M)
+        
+        # Minimum distance from each point in y to x and from x to y
+        dist_y_to_x = torch.min(dist, dim=2)[0]  # (B, N)
+        dist_x_to_y = torch.min(dist, dim=1)[0]  # (B, M)
+        
+        # Mean distance
+        loss = torch.mean(dist_y_to_x) + torch.mean(dist_x_to_y)
+        
+        return loss
 
 # def compute_receptive_fields(data, p, k):
 #     # TODO: current taking 2 hops. Should I take 2 * 4 = 8 hops (equal to num executed LFA blocks)?
@@ -58,21 +73,51 @@ def compute_receptive_fields(data, p, k, L=4):
     return data[list(current_points)]
 
 
-def chamfer_loss(D_f_p, points, point_indices):
+def chamfer_loss(D_f_p, points, point_indices, k, device):
     # D_f_p: (B, M, 3)
     # points: (B, N, 3)
     # point_indices: (16,)
-    chamfer_dist = ChamferDistance()
+    chamfer_dist = ChamferDistance().to(device)
     # Q = points[np.random.choice(points.shape[0], 16, replace=False)]
     total_loss = 0.0
     for i, P in enumerate(points):
         for p_idx in point_indices:
-            R_p = compute_receptive_fields(P, P[p_idx], k=32)
+            R_p = compute_receptive_fields(P, P[p_idx], k)
             R_bar_p = R_p - torch.mean(R_p, axis=0)
-            loss = chamfer_dist(D_f_p[i], R_bar_p)
+            loss = chamfer_dist(D_f_p[i].unsqueeze(0), R_bar_p.unsqueeze(0))
             total_loss += loss
         
     return total_loss / (16 * len(points))
+
+# def chamfer_loss(D_f_p, points, point_indices, k=32):
+#     # D_f_p: (B, M, 3)
+#     # points: (B, N, 3)
+#     # point_indices: (16,)
+    
+#     chamfer_dist = ChamferDistance()
+#     # Select points at the given indices across all batches
+#     selected_points = points[:, point_indices, :]  # (B, 16, 3)
+    
+#     # Compute receptive fields for the selected points
+#     R_p_list = []
+#     # for P, indices in zip(points, point_indices):
+#     for P in points:
+#         R_p = torch.stack([compute_receptive_fields(P, P[idx], k) for idx in point_indices], dim=0)
+#         R_p_list.append(R_p)
+    
+#     # Concatenate receptive fields across batches
+#     R_p_all = torch.cat(R_p_list, dim=0)  # (B*16, k, 3)
+    
+#     # Normalize receptive fields
+#     R_bar_p_all = R_p_all - torch.mean(R_p_all, dim=1, keepdim=True)
+    
+#     # Reshape D_f_p for loss calculation
+#     D_f_p_repeated = D_f_p.repeat_interleave(len(point_indices), dim=0)  # (B*16, M, 3)
+    
+#     # Calculate Chamfer loss
+#     loss = chamfer_dist(D_f_p_repeated, R_bar_p_all)
+    
+#     return loss / (16 * len(points))
 
 
 def normalized_mse_loss(f_S, f_T):
