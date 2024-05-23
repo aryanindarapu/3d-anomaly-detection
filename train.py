@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
-from dataset import get_mn10_data, get_mvtec_data, ADDataset
+from dataset import get_mn10_data, get_mvtec_data, ADDataset, custom_collate_fn
 from model import Model, Decoder
 import numpy as np
 import argparse
@@ -41,8 +41,8 @@ if __name__ == "__main__":
     mn10_train_dataset = ADDataset(mn10_train_data, k=k, normalize=True)
     mn10_val_dataset = ADDataset(mn10_val_data, k=k, normalize=True)
     
-    mn10_train_loader = DataLoader(mn10_train_dataset, batch_size=20, shuffle=True)
-    mn10_val_loader = DataLoader(mn10_val_dataset, batch_size=20, shuffle=False)
+    mn10_train_loader = DataLoader(mn10_train_dataset, batch_size=1, shuffle=True, collate_fn=custom_collate_fn)
+    mn10_val_loader = DataLoader(mn10_val_dataset, batch_size=1, shuffle=False, collate_fn=custom_collate_fn)
     
     # Initialize the teacher and decoder models
     teacher = Model(k=k).to(device)
@@ -60,8 +60,8 @@ if __name__ == "__main__":
     teacher_train_losses = []
     teacher_val_losses = []
     for epoch in tqdm(range(n_teacher_epochs)):
-        loss = 0.0
-        for i, (points, nearest_neighbors) in enumerate(mn10_train_loader):
+        total_loss = 0.0
+        for i, (points, nearest_neighbors, nnbrs) in enumerate(mn10_train_loader):
             # features = torch.zeros(64000, 64) # n points, dimension 64; TODO: should I reinitialize for every point cloud?
             teacher_optimizer.zero_grad()
             features = teacher(points.to(device), torch.zeros(points.shape[0], n_points, 64).to(device), nearest_neighbors.to(device))
@@ -70,14 +70,26 @@ if __name__ == "__main__":
             indices = torch.randint(0, features.shape[1], (16,))
             output = decoder(features[:, indices, :])
             
-            loss += chamfer_loss(output, points.to(device), indices, k, device)
+            loss = chamfer_loss(output, points.to(device), indices, k, nnbrs, device)
             loss.backward()
-            teacher_optimizer.step()
-            
+            total_loss += loss.item()
+            teacher_optimizer.step()            
         
         if i % 10 == 0:
             print(f"Epoch {epoch}, Iteration {i}, Loss: {loss.item()}")
         teacher_train_losses.append(loss.item())
+        
+        # Validation
+        with torch.no_grad():
+            val_loss = 0.0
+            for points, nearest_neighbors, nnbrs in mn10_val_loader:
+                features = teacher(points.to(device), torch.zeros(points.shape[0], n_points, 64).to(device), nearest_neighbors.to(device))
+                indices = torch.randint(0, features.shape[1], (16,))
+                output = decoder(features[:, indices, :])
+                loss = chamfer_loss(output, points.to(device), indices, k, nnbrs, device)
+                val_loss += loss.item()
+                
+            teacher_val_losses.append(val_loss)
             
             
     # plot loss curve
@@ -85,6 +97,12 @@ if __name__ == "__main__":
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.title("Teacher Model Loss")
+    plt.show()
+    
+    plt.plot(teacher_val_losses)
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Teacher Model Validation Loss")
     plt.show()
                 
     torch.save(teacher.state_dict(), 'models/teacher.pth')

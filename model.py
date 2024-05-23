@@ -94,8 +94,8 @@ class Decoder(nn.Module):
     def forward(self, x):
         B, _, _ = x.shape
         x = self.input(x)
-        x = F.leaky_relu(self.hidden1(x), -0.05)
-        x = F.leaky_relu(self.hidden1(x), -0.05)
+        x = F.leaky_relu(self.hidden1(x), 0.05)
+        x = F.leaky_relu(self.hidden1(x), 0.05)
         x = self.output(x)
         
         return x.view(B, -1, 3)

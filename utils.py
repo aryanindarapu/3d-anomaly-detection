@@ -55,17 +55,17 @@ class ChamferDistance(nn.Module):
     
 #     return data[list(all_points)]
 
-def compute_receptive_fields(data, p, k, L=4):
+def compute_receptive_fields(data, p, nnbrs, L=4):
     hops = 4 * L
-    nbrs = NearestNeighbors(n_neighbors=k+1, algorithm='auto').fit(data)
+    # nbrs = NearestNeighbors(n_neighbors=k+1, algorithm='auto').fit(data)
     
-    distances, indices = nbrs.kneighbors([p])
+    distances, indices = nnbrs.kneighbors([p])
     current_points = set(indices.flatten())
     
-    for _ in range(hops):  # already took the first hop
+    for _ in range(hops):
         next_points = set()
         for idx in current_points:
-            _, hop_indices = nbrs.kneighbors([data[idx]])
+            _, hop_indices = nnbrs.kneighbors([data[idx]])
             next_points.update(hop_indices.flatten())
         
         current_points.update(next_points)
@@ -73,7 +73,7 @@ def compute_receptive_fields(data, p, k, L=4):
     return data[list(current_points)]
 
 
-def chamfer_loss(D_f_p, points, point_indices, k, device):
+def chamfer_loss(D_f_p, points, point_indices, k, nnbrs, device):
     # D_f_p: (B, M, 3)
     # points: (B, N, 3)
     # point_indices: (16,)
@@ -82,9 +82,9 @@ def chamfer_loss(D_f_p, points, point_indices, k, device):
     total_loss = 0.0
     for i, P in enumerate(points):
         for p_idx in point_indices:
-            R_p = compute_receptive_fields(P, P[p_idx], k)
+            R_p = compute_receptive_fields(P, P[p_idx], nnbrs[i])
             R_bar_p = R_p - torch.mean(R_p, axis=0)
-            loss = chamfer_dist(D_f_p[i].unsqueeze(0), R_bar_p.unsqueeze(0))
+            loss = chamfer_dist(D_f_p[i].unsqueeze(0).to(device), R_bar_p.unsqueeze(0).to(device))
             total_loss += loss
         
     return total_loss / (16 * len(points))

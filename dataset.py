@@ -171,14 +171,20 @@ def get_mvtec_test_data(n_samples=10, n_points=64000):
     pcds = np.array(pcds)
     
     return gt_data, pcds
+
         
-    
+def custom_collate_fn(batch):
+    data = torch.stack([item[0] for item in batch])
+    nearest_neighbors = torch.stack([item[1] for item in batch])
+    nnbrs_obj_list = [item[2] for item in batch]
+    return data, nearest_neighbors, nnbrs_obj_list    
+
 
 class ADDataset(Dataset):
     def __init__(self, data, k, normalize=False):
         self.k = k
         self.data = torch.tensor(data, dtype=torch.float32)
-        self.nearest_neighbors = self.compute_nearest_neighbors(data, k)
+        self.nearest_neighbors, self.nnbrs_obj_list = self.compute_nearest_neighbors(data, k)
         
         # P - point cloud (n_points, 3)
         # p - point (3,)
@@ -225,23 +231,33 @@ class ADDataset(Dataset):
             s /= N * k
             
             # Normalize the data
-            for P in self.data:
-                P /= s
+            for idx in range(len(self.data)):
+                self.data[idx] /= s
+                
+            
+            print(f"Normalization factor: {s}")
+            # visualize the normalized point cloud
+            # pc = o3d.geometry.PointCloud()
+            # pc.points = o3d.utility.Vector3dVector(self.data[0].numpy())
+            # o3d.visualization.draw_geometries([pc])
+            
                 
         
     def compute_nearest_neighbors(self, data, k):
         nearest_neighbors_list = []
+        nnbrs_obj_list = []
         for P in data:
             nbrs = NearestNeighbors(n_neighbors=k+1, algorithm='kd_tree').fit(P)
+            nnbrs_obj_list.append(nbrs)
             _, indices = nbrs.kneighbors(P)
             # Exclude the point itself
             indices = indices[:, 1:]
             nearest_neighbors_list.append(indices)
             
-        return torch.tensor(np.array(nearest_neighbors_list))         
+        return torch.tensor(np.array(nearest_neighbors_list)), nnbrs_obj_list 
 
     def __len__(self):
         return len(self.data)
     
     def __getitem__(self, idx):
-        return self.data[idx], self.nearest_neighbors[idx]
+        return self.data[idx], self.nearest_neighbors[idx], self.nnbrs_obj_list[idx]
