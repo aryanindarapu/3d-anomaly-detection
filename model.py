@@ -1,12 +1,17 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-import numpy as np
+import open3d as o3d
 
 class SharedMLP(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(SharedMLP, self).__init__()
         self.linear = nn.Linear(input_dim, output_dim)
+        
+        self.initialize_weights()
+        
+    def initialize_weights(self):
+        nn.init.xavier_uniform_(self.linear.weight)
             
     def forward(self, x):
         x = self.linear(x)
@@ -42,9 +47,9 @@ class LFABlock(nn.Module):
         # dist_matrix = torch.cdist(points, points)
         # _, knn_indices = torch.topk(dist_matrix, self.k, largest=False)
         
-        knn_points = torch.gather(points.unsqueeze(1).expand(B, N, N, D), 2, knn_indices.unsqueeze(-1).expand(B, N, self.k, D))
+        knn_points = torch.gather(points.unsqueeze(1).expand(B, N, N, D), 2, knn_indices.long().unsqueeze(-1).expand(B, N, self.k, D))
         
-        # compute geometric features, G: (B, N, k, 4)
+        # compute geometric features, G: (B, N, k, 4 (x, y, z, dist))
         # for each point, compute the difference between it and its k nearest neighbors
         p_expanded = points.unsqueeze(2).expand(B, N, self.k, D)
         geometric_features = torch.cat([p_expanded - knn_points, torch.norm(p_expanded - knn_points, dim=-1, keepdim=True)], dim=-1)
@@ -53,7 +58,7 @@ class LFABlock(nn.Module):
         mlp_output = self.smlp(geometric_features)
         mlp_output = mlp_output.view(B, N, self.k, self.d)
         
-        features_expanded = torch.gather(features.unsqueeze(1).expand(B, N, N, F_D), 2, knn_indices.unsqueeze(-1).expand(B, N, self.k, F_D))
+        features_expanded = torch.gather(features.unsqueeze(1).expand(B, N, N, F_D), 2, knn_indices.long().unsqueeze(-1).expand(B, N, self.k, F_D))
         
         concatenated_features = torch.cat([mlp_output, features_expanded], dim=-1)
         
@@ -69,54 +74,41 @@ class ResidualBlock(nn.Module):
         self.lfa1 = LFABlock(k, d // 4)
         self.lfa2 = LFABlock(k, d // 2)
         self.final_smlp = SharedMLP(d, d)
-        self.res_smlp = SharedMLP(d, d)
+        # self.res_smlp = SharedMLP(d, d)
     
     def forward(self, points, features, knn_indices):
+        # residual = features
         x = self.initial_smlp(features)
         x = self.lfa1(points, x, knn_indices)
         x = self.lfa2(points, x, knn_indices)
         x = self.final_smlp(x)
-        residual = self.res_smlp(features)
+        residual = self.final_smlp(features)
+        
+        # residual = self.res_smlp(features)
         x = x + residual
         # x = F.relu(x)
         
         return x
     
-class Decoder(nn.Module):
-    def __init__(self, d=64, m=1024):
-        super(Decoder, self).__init__()
-        
-        self.input = nn.Linear(d, 128)
-        self.hidden1 = nn.Linear(128, 128)
-        self.hidden2 = nn.Linear(128, 128)
-        self.output = nn.Linear(128, m*3)
-        
-    def forward(self, x):
-        B, _, _ = x.shape
-        x = self.input(x)
-        x = F.leaky_relu(self.hidden1(x), 0.05)
-        x = F.leaky_relu(self.hidden1(x), 0.05)
-        x = self.output(x)
-        
-        return x.view(B, -1, 3)
-    
     
 class Model(nn.Module):
-    def __init__(self, k, is_student=False):
+    def __init__(self, d, k, R, is_student=False):
         super(Model, self).__init__()
-        self.residual_blocks = nn.ModuleList([ResidualBlock(k=k) for _ in range(4)])
+        self.residual_blocks = nn.ModuleList([ResidualBlock(d=d, k=k) for _ in range(R)])
+        self.smlp = SharedMLP(d, d)
         
-        if is_student:
-            # initialize with uniformly distributed random weights
-            for block in self.residual_blocks:
-                for param in block.parameters():
-                    nn.init.uniform_(param, -0.1, 0.1) # TODO: is this the correct range?
+        # if is_student:
+        #     # initialize with uniformly distributed random weights
+        #     for block in self.residual_blocks:
+        #         for param in block.parameters():
+        #             nn.init.uniform_(param, -0.1, 0.1) # TODO: is this the correct range?
         
     def forward(self, points, features, knn_indices):
         # run point cloud input through residual blocks
         for block in self.residual_blocks:
             features = block(points, features, knn_indices)
-        
+            
+        features = self.smlp(features)
         return features
     
         # x = None
@@ -127,6 +119,33 @@ class Model(nn.Module):
         
         # return x, features, indices
         
+        
+class Decoder(nn.Module):
+    def __init__(self, d=64, h_d=128, m=1024):
+        super(Decoder, self).__init__()
+        
+        self.input = nn.Linear(d, h_d)
+        self.hidden1 = nn.Linear(h_d, h_d)
+        self.hidden2 = nn.Linear(h_d, h_d)
+        self.output = nn.Linear(h_d, m*3)
+        
+        self.initialize_weights()
+        
+    def initialize_weights(self):
+        nn.init.xavier_uniform_(self.input.weight)
+        nn.init.xavier_uniform_(self.hidden1.weight)
+        nn.init.xavier_uniform_(self.hidden2.weight)
+        nn.init.xavier_uniform_(self.output.weight)
+        
+    def forward(self, x):
+        B, _, _ = x.shape
+        x = self.input(x)
+        x = F.leaky_relu(self.hidden1(x), 0.05)
+        x = F.leaky_relu(self.hidden1(x), 0.05)
+        x = self.output(x)
+        
+        return x.view(B, -1, 3)
+    
 # 4 residual blocks, d = 64
 # shared MLPs are dense layer and leaky ReLU with alpha = 0.2
 # LFA uses nearest neighbor search with k = 32
