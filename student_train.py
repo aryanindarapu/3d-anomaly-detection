@@ -82,7 +82,7 @@ if __name__ == "__main__":
         np.save("data/mean_potato.npy", mean.cpu().numpy())
         np.save("data/std_potato.npy", std.cpu().numpy())
 
-    exit()
+    # exit()
     student.train()
     print("Training student model")
     student_train_losses = []
